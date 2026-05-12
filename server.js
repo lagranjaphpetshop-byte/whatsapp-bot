@@ -1,18 +1,18 @@
 require("dotenv").config();
 const express = require("express");
-const bodyParser = require("body-parser");
 const axios = require("axios");
+const { google } = require("googleapis");
 const OpenAI = require("openai");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
 // ================= ENV =================
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
 
-// ================= IA =================
+// ================= OPENROUTER =================
 let client = null;
 
 if (process.env.OPENROUTER_API_KEY) {
@@ -22,12 +22,26 @@ if (process.env.OPENROUTER_API_KEY) {
     });
 }
 
+// ================= GOOGLE CALENDAR =================
+let calendar = null;
+
+try {
+    const auth = new google.auth.GoogleAuth({
+        keyFile: "credentials.json",
+        scopes: ["https://www.googleapis.com/auth/calendar"]
+    });
+
+    calendar = google.calendar({ version: "v3", auth });
+
+} catch (e) {
+    console.log("⚠️ Calendar no configurado");
+}
+
 // ================= MEMORY =================
 const users = {};
-const chats = {};
 const processed = new Set();
 
-// ================= WEBHOOK VERIFY =================
+// ================= VERIFY =================
 app.get("/webhook", (req, res) => {
     const mode = req.query["hub.mode"];
     const challenge = req.query["hub.challenge"];
@@ -36,7 +50,7 @@ app.get("/webhook", (req, res) => {
     if (mode && verifyToken === verify_token) {
         return res.status(200).send(challenge);
     }
-    return res.sendStatus(403);
+    res.sendStatus(403);
 });
 
 // ================= WEBHOOK =================
@@ -55,7 +69,6 @@ app.post("/webhook", async (req, res) => {
         const text = message.text?.body?.toLowerCase().trim() || "";
         const id = message.id;
 
-        // evitar duplicados
         if (processed.has(id)) return;
         processed.add(id);
 
@@ -70,15 +83,7 @@ app.post("/webhook", async (req, res) => {
             };
         }
 
-        // init chat log
-        if (!chats[from]) chats[from] = [];
-
-        chats[from].push({ from, text, time: new Date().toISOString() });
-
         let reply = "";
-
-        // ================= SOLO RESPONDE SI HAY TEXTO =================
-        if (!text) return;
 
         // ================= MENU =================
         if (text === "hola" || text === "menu") {
@@ -86,9 +91,7 @@ app.post("/webhook", async (req, res) => {
             users[from].step = "idle";
 
             reply =
-`🐾 👋Bienvenido a La GranjaPH soy tu asesor virtual en que puedo ayudarte
-
-Elige una opción:
+`🐾 La Granja PH
 
 1️⃣ Agendar cita
 2️⃣ Productos
@@ -96,40 +99,28 @@ Elige una opción:
 4️⃣ Consulta médica`;
         }
 
-        // ================= INICIO SOLO SI ESTA IDLE =================
+        // ================= START FLOW =================
         else if (text === "1" && users[from].step === "idle") {
-
             users[from].step = "name";
-            reply = "👤 Perfecto, ¿cuál es tu nombre?";
+            reply = "👤 ¿Cuál es tu nombre?";
         }
 
-        // ================= FLUJO CONTROLADO =================
         else if (users[from].step === "name") {
-
             users[from].name = text;
             users[from].step = "pet";
-            reply = "🐶 ¿Nombre de tu mascota?";
+            reply = "🐶 Nombre de tu mascota";
         }
 
         else if (users[from].step === "pet") {
-
             users[from].pet = text;
             users[from].step = "date";
-            reply = "📅 Escribe la fecha (YYYY-MM-DD)";
+            reply = "📅 Fecha (YYYY-MM-DD)";
         }
 
         else if (users[from].step === "date") {
-
             users[from].date = text;
             users[from].step = "time";
-
-            reply =
-`⏰ Elige horario:
-
-1️⃣ 9:00 AM
-2️⃣ 11:00 AM
-3️⃣ 2:00 PM
-4️⃣ 4:00 PM`;
+            reply = "⏰ 1=9am 2=11am 3=2pm 4=4pm";
         }
 
         else if (users[from].step === "time") {
@@ -142,72 +133,86 @@ Elige una opción:
             };
 
             if (!slots[text]) {
-                reply = "❌ Elige un número del 1 al 4";
+                reply = "❌ Elige 1-4";
             } else {
 
                 users[from].time = slots[text];
 
+                // ================= SHEETS =================
                 try {
                     await axios.post(SHEET_URL, {
                         nombre: users[from].name,
                         mascota: users[from].pet,
-                        servicio: "Baño",
+                        servicio: "Baño y grooming",
                         fecha: users[from].date,
                         hora: users[from].time
                     });
-
-                    reply = `✅ Listo ${users[from].name}, tu cita para ${users[from].pet} quedó agendada a las ${users[from].time} `;
-
-                    users[from].step = "idle";
-
                 } catch (e) {
-                    reply = "⚠️ Error guardando cita, intenta más tarde";
+                    console.log("Sheets error");
                 }
+
+                // ================= CALENDAR =================
+                try {
+                    if (calendar) {
+                        await calendar.events.insert({
+                            calendarId: "primary",
+                            requestBody: {
+                                summary: `Cita - ${users[from].pet} `,
+                                description: `Cliente: ${users[from].name} `,
+                                start: {
+                                    dateTime: `${users[from].date}T10:00:00 `,
+                                    timeZone: "America/Bogota"
+                                },
+                                end: {
+                                    dateTime: `${users[from].date}T10:30:00 `,
+                                    timeZone: "America/Bogota"
+                                }
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.log("Calendar error");
+                }
+
+                reply = `✅ Cita confirmada para ${users[from].pet} a las ${users[from].time} `;
+
+                users[from].step = "idle";
             }
         }
 
-        // ================= OPCIONES DIRECTAS =================
+        // ================= OTHER OPTIONS =================
         else if (text === "2") {
-            reply = "🍖 Tenemos alimento premium para perros y gatos. ¿Qué necesitas?";
+            reply = "🍖 Comida premium para perros y gatos";
         }
 
-        else if (text === "3" || text.includes("asesor")) {
-
-            users[from].step = "advisor";
-
-            reply = "👩‍⚕️ Un asesor te responderá pronto. Escribe tu consulta.";
+        else if (text === "3") {
+            reply = "👩‍⚕️ Un asesor te responderá pronto";
         }
 
-        else if (text === "4" || users[from].step === "advisor") {
-
-            reply = "🩺 Describe el problema de tu mascota y un veterinario lo revisará.";
+        else if (text === "4") {
+            reply = "🩺 Describe el problema de tu mascota";
         }
 
-        // ================= IA SOLO SI ESTA IDLE =================
-        else if (users[from].step === "idle") {
+        // ================= IA =================
+        else if (users[from].step === "idle" && client) {
 
-            if (client) {
-                const completion = await client.chat.completions.create({
-                    model: "openai/gpt-4o-mini",
-                    messages: [
-                        {
-                            role: "system",
-                            content: "Eres asistente veterinario. Respuestas cortas, claras y profesionales."
-                        },
-                        {
-                            role: "user",
-                            content: text
-                        }
-                    ]
-                });
+            const completion = await client.chat.completions.create({
+                model: "openai/gpt-4o-mini",
+                messages: [
+                    {
+                        role: "system",
+                        content: "Eres asistente veterinario. Respuestas cortas."
+                    },
+                    {
+                        role: "user",
+                        content: text
+                    }
+                ]
+            });
 
-                reply = completion.choices[0].message.content;
-            } else {
-                reply = "🤖 Servicio no disponible en este momento";
-            }
+            reply = completion.choices[0].message.content;
         }
 
-        // ================= ENVIO =================
         if (!reply) return;
 
         await axios.post(
@@ -224,16 +229,16 @@ Elige una opción:
             }
         );
 
-        console.log("✔️ mensaje enviado");
+        console.log("✔️ enviado");
 
     } catch (err) {
         console.log("ERROR:", err.message);
     }
 });
 
-// ================= SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log("🚀 Bot corriendo en puerto", PORT);
+    console.log("🚀 Bot listo en puerto", PORT);
 });
