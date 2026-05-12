@@ -85,7 +85,7 @@ if (text === "hola" || text === "menu") {
     usuarios[from].paso = "";
 
     respuesta =
-`🐾 BienvenidoLa GranjaPH soy tu asesor virtualen que puedo ayudarte hoy
+`🐾 Bienvenido a La GranjaPH soy tu asesor virtualen que puedo ayudarte hoy
 
 1️⃣ Agendar baño y grooming
 2️⃣ Productos
@@ -110,7 +110,7 @@ else if (usuarios[from].paso === "nombre") {
     usuarios[from].nombre = text;
     usuarios[from].paso = "mascota";
 
-    respuesta = "🐶 Nombre de tu mascota:";
+    respuesta = "🐶 Cual es el nombre de tu mascota?:";
 }
 
 // MASCOTA
@@ -119,7 +119,7 @@ else if (usuarios[from].paso === "mascota") {
     usuarios[from].mascota = text;
     usuarios[from].paso = "fecha";
 
-    respuesta = "📅 Escribe la fecha asi (YYYY-MM-DD)";
+    respuesta = "📅 Escribe la fecha de la siguiente forma sin espacios año,mes y dia (YYYY-MM-DD)";
 }
 
 // FECHA
@@ -130,6 +130,7 @@ else if (usuarios[from].paso === "fecha") {
 
     respuesta =
 `⏰ Horarios disponibles:
+
 1️⃣ 9am
 2️⃣ 11am
 3️⃣ 2pm
