@@ -163,7 +163,7 @@ app.post("/webhook", async (req, res) => {
                     });
 
                     if (result.data?.disponible) {
-                        reply = ✅ Cita confirmada para ${users[from].pet};
+                        reply = `✅ Tu cita a sido confirmada para ${users[from].pet}`;
                         delete users[from];
                     } else {
                         reply = "❌ Horario ocupado, intenta otro horario";
@@ -282,7 +282,7 @@ Si es grave, recomienda consulta presencial.`
             },
             {
                 headers: {
-                    Authorization: `Bearer ${token} `,
+                    Authorization: `Bearer ${token}`,
                     "Content-Type": "application/json"
                 }
             }
