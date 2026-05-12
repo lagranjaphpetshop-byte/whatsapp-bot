@@ -7,10 +7,6 @@ const OpenAI = require("openai");
 const app = express();
 app.use(bodyParser.json());
 
-const app = express();
-
-app.use(bodyParser.json());
-
 // 👇 PEGA AQUÍ LA PRUEBA
 console.log("ENV CHECK:", {
   TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
