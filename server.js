@@ -1,4 +1,3 @@
-
 const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
@@ -7,7 +6,9 @@ const OpenAI = require("openai");
 const app = express();
 app.use(bodyParser.json());
 
-// 👇 PEGA AQUÍ LA PRUEBA
+// =========================
+// LOG VARIABLES
+// =========================
 console.log("ENV CHECK:", {
   TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
   VERIFY_TOKEN: !!process.env.VERIFY_TOKEN,
@@ -19,6 +20,9 @@ const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
 
+// =========================
+// OPENROUTER CLIENT
+// =========================
 let client = null;
 
 if (process.env.OPENROUTER_API_KEY) {
@@ -28,13 +32,15 @@ if (process.env.OPENROUTER_API_KEY) {
     });
 }
 
+// =========================
+// MEMORIA
+// =========================
 const usuarios = {};
 const processedMessages = new Set();
 
 // =========================
-// WEBHOOK VERIFY
+// VERIFY WEBHOOK
 // =========================
-
 app.get("/webhook", (req, res) => {
     const mode = req.query["hub.mode"];
     const challenge = req.query["hub.challenge"];
@@ -43,41 +49,36 @@ app.get("/webhook", (req, res) => {
     if (mode && verifyToken === verify_token) {
         return res.status(200).send(challenge);
     }
+
     return res.sendStatus(403);
 });
 
 // =========================
 // WEBHOOK POST
 // =========================
-
-//app.post("/webhook", async (req, res) => {
-  //  res.sendStatus(200);
 app.post("/webhook", async (req, res) => {
 
-    console.log("📩 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
+    console.log("📩 WEBHOOK HIT");
 
     res.sendStatus(200);
 
     try {
-      //  const message =
-    //        req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-  //      if (!message) return;
-      const value = req.body.entry?.[0]?.changes?.[0]?.value;
+        const value = req.body.entry?.[0]?.changes?.[0]?.value;
+        const message = value?.messages?.[0];
 
-const message = value?.messages?.[0];
+        if (!message || message.type !== "text") {
+            return;
+        }
 
-if (!message) {
-    console.log("ℹ️ Evento ignorado (no es mensaje)");
-    return;
-}
-
-        const msgId = message.id;
-        if (processedMessages.has(msgId)) return;
-        processedMessages.add(msgId);
+        // evitar duplicados
+        if (processedMessages.has(message.id)) return;
+        processedMessages.add(message.id);
 
         const from = message.from;
-        const text = message.text?.body?.toLowerCase().trim() || "";
+        const text = message.text?.body?.toLowerCase().trim();
+
+        console.log("Mensaje recibido:", text);
 
         if (!usuarios[from]) {
             usuarios[from] = {
@@ -94,7 +95,7 @@ if (!message) {
         // ================= MENU =================
         if (text === "hola" || text === "menu") {
             usuarios[from].paso = "";
-            respuesta = "🐾 Bienvenido a La Granja PH\n\n1️⃣ Agendar baño\n2️⃣ Productos\n3️⃣ Asesor";
+            respuesta = "🐾 Bienvenido\n1️⃣ Agendar baño\n2️⃣ Productos\n3️⃣ Asesor";
         }
 
         // ================= FLUJO =================
@@ -112,17 +113,17 @@ if (!message) {
         else if (usuarios[from].paso === "mascota") {
             usuarios[from].mascota = text;
             usuarios[from].paso = "fecha";
-            respuesta = "📅 Fecha (YYYY-MM-DD)";
+            respuesta = "📅 Fecha YYYY-MM-DD";
         }
 
         else if (usuarios[from].paso === "fecha") {
             usuarios[from].fecha = text;
             usuarios[from].paso = "hora";
-
             respuesta = "⏰ 1️⃣9am 2️⃣11am 3️⃣2pm 4️⃣4pm";
         }
 
         else if (usuarios[from].paso === "hora") {
+
             const horarios = {
                 "1": "9:00 AM",
                 "2": "11:00 AM",
@@ -131,8 +132,9 @@ if (!message) {
             };
 
             if (!horarios[text]) {
-                respuesta = "❌ Opción inválida (1-4)";
+                respuesta = "❌ Elige 1-4";
             } else {
+
                 usuarios[from].hora = horarios[text];
 
                 try {
@@ -145,7 +147,7 @@ if (!message) {
                     });
 
                     if (resultado.data?.disponible) {
-                        respuesta = `✅ Cita confirmada `;
+                        respuesta = "✅ Cita confirmada";
                         delete usuarios[from];
                     } else {
                         respuesta = "❌ Horario ocupado";
@@ -167,14 +169,16 @@ if (!message) {
 
         // ================= IA =================
         else {
+
             try {
+
                 if (client) {
                     const completion = await client.chat.completions.create({
                         model: "openai/gpt-4o-mini",
                         messages: [
                             {
                                 role: "system",
-                                content: "Eres asistente de veterinaria. Respuestas cortas."
+                                content: "Eres asistente de veterinaria. Responde corto."
                             },
                             {
                                 role: "user",
@@ -184,24 +188,30 @@ if (!message) {
                     });
 
                     respuesta = completion.choices[0].message.content;
+
                 } else {
                     respuesta = "🤖 IA no disponible";
                 }
+
             } catch (e) {
-                respuesta = "⚠️ Error en IA, intenta otra vez";
+                console.log("IA error:", e.message);
+                respuesta = "⚠️ Error en IA";
             }
         }
 
+        // ================= ENVIAR WHATSAPP =================
         await axios.post(
             "https://graph.facebook.com/v22.0/1168848789639885/messages",
             {
                 messaging_product: "whatsapp",
                 to: from,
+                type: "text",
                 text: { body: respuesta }
             },
             {
                 headers: {
-                    Authorization: `Bearer ${token} `
+                    Authorization: `Bearer ${token} `,
+                    "Content-Type": "application/json"
                 }
             }
         );
@@ -212,7 +222,8 @@ if (!message) {
 });
 
 // =========================
-
+// SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
