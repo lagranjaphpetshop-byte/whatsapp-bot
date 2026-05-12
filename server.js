@@ -50,7 +50,12 @@ app.get("/webhook", (req, res) => {
 // WEBHOOK POST
 // =========================
 
+//app.post("/webhook", async (req, res) => {
+  //  res.sendStatus(200);
 app.post("/webhook", async (req, res) => {
+
+    console.log("📩 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
+
     res.sendStatus(200);
 
     try {
