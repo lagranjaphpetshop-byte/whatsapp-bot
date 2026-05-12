@@ -7,6 +7,18 @@ const OpenAI = require("openai");
 const app = express();
 app.use(bodyParser.json());
 
+const app = express();
+
+app.use(bodyParser.json());
+
+// 👇 PEGA AQUÍ LA PRUEBA
+console.log("ENV CHECK:", {
+  TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
+  VERIFY_TOKEN: !!process.env.VERIFY_TOKEN,
+  OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
+  SHEET_URL: !!process.env.SHEET_URL
+});
+
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
