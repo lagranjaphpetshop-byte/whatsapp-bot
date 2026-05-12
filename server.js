@@ -7,24 +7,16 @@ const app = express();
 app.use(bodyParser.json());
 
 // =========================
-// LOG VARIABLES
+// CONFIG
 // =========================
-console.log("ENV CHECK:", {
-  TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
-  VERIFY_TOKEN: !!process.env.VERIFY_TOKEN,
-  OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
-  SHEET_URL: !!process.env.SHEET_URL
-});
+console.log("🚀 BOT INICIANDO...");
 
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
 
-// =========================
-// OPENROUTER CLIENT
-// =========================
+// OpenRouter
 let client = null;
-
 if (process.env.OPENROUTER_API_KEY) {
     client = new OpenAI({
         baseURL: "https://openrouter.ai/api/v1",
@@ -36,7 +28,7 @@ if (process.env.OPENROUTER_API_KEY) {
 // MEMORIA
 // =========================
 const usuarios = {};
-const processedMessages = new Set();
+const processed = new Set();
 
 // =========================
 // VERIFY WEBHOOK
@@ -54,11 +46,9 @@ app.get("/webhook", (req, res) => {
 });
 
 // =========================
-// WEBHOOK POST
+// WEBHOOK
 // =========================
 app.post("/webhook", async (req, res) => {
-
-    console.log("📩 WEBHOOK HIT");
 
     res.sendStatus(200);
 
@@ -67,18 +57,15 @@ app.post("/webhook", async (req, res) => {
         const value = req.body.entry?.[0]?.changes?.[0]?.value;
         const message = value?.messages?.[0];
 
-        if (!message || message.type !== "text") {
-            return;
-        }
+        if (!message || message.type !== "text") return;
 
-        // evitar duplicados
-        if (processedMessages.has(message.id)) return;
-        processedMessages.add(message.id);
+        if (processed.has(message.id)) return;
+        processed.add(message.id);
 
         const from = message.from;
         const text = message.text?.body?.toLowerCase().trim();
 
-        console.log("Mensaje recibido:", text);
+        console.log("📩:", text);
 
         if (!usuarios[from]) {
             usuarios[from] = {
@@ -92,34 +79,56 @@ app.post("/webhook", async (req, res) => {
 
         let respuesta = "";
 
-        // ================= MENU =================
+        // ================= MENU PRINCIPAL =================
         if (text === "hola" || text === "menu") {
+
             usuarios[from].paso = "";
-            respuesta = "🐾 Bienvenido\n1️⃣ Agendar baño\n2️⃣ Productos\n3️⃣ Asesor";
+
+            respuesta =
+`🐾 La Granja PH
+
+1️⃣ Agendar baño y grooming
+2️⃣ Productos
+3️⃣ Consulta médica veterinaria
+4️⃣ Hablar con asesor`;
+
         }
 
-        // ================= FLUJO =================
-        else if (text === "1" && usuarios[from].paso === "") {
+        // ================= OPCIÓN 1 =================
+        else if (text === "1") {
+
             usuarios[from].paso = "nombre";
+
             respuesta = "📝 ¿Cuál es tu nombre?";
         }
 
         else if (usuarios[from].paso === "nombre") {
+
             usuarios[from].nombre = text;
             usuarios[from].paso = "mascota";
-            respuesta = "🐶 Nombre de tu mascota?";
+
+            respuesta = "🐶 Nombre de tu mascota:";
         }
 
         else if (usuarios[from].paso === "mascota") {
+
             usuarios[from].mascota = text;
             usuarios[from].paso = "fecha";
-            respuesta = "📅 Fecha YYYY-MM-DD";
+
+            respuesta = "📅 Escribe la fecha (YYYY-MM-DD)";
         }
 
         else if (usuarios[from].paso === "fecha") {
+
             usuarios[from].fecha = text;
             usuarios[from].paso = "hora";
-            respuesta = "⏰ 1️⃣9am 2️⃣11am 3️⃣2pm 4️⃣4pm";
+
+            respuesta =
+`⏰ Horarios:
+1️⃣ 9am
+2️⃣ 11am
+3️⃣ 2pm
+4️⃣ 4pm`;
         }
 
         else if (usuarios[from].paso === "hora") {
@@ -138,7 +147,8 @@ app.post("/webhook", async (req, res) => {
                 usuarios[from].hora = horarios[text];
 
                 try {
-                    const resultado = await axios.post(SHEET_URL, {
+
+                    const result = await axios.post(SHEET_URL, {
                         nombre: usuarios[from].nombre,
                         mascota: usuarios[from].mascota,
                         servicio: "Baño y grooming",
@@ -146,25 +156,46 @@ app.post("/webhook", async (req, res) => {
                         hora: usuarios[from].hora
                     });
 
-                    if (resultado.data?.disponible) {
-                        respuesta = "✅ Cita confirmada";
+                    if (result.data?.disponible) {
+                        respuesta = `✅ Cita confirmada para ${usuarios[from].mascota} `;
                         delete usuarios[from];
                     } else {
-                        respuesta = "❌ Horario ocupado";
+                        respuesta = "❌ Horario ocupado, elige otro";
                     }
 
-                } catch (e) {
-                    respuesta = "⚠️ Error guardando cita";
+                } catch {
+                    respuesta = "⚠️ Error en sistema de citas";
                 }
             }
         }
 
+        // ================= PRODUCTOS =================
         else if (text === "2") {
-            respuesta = "🍖 Comida premium disponible";
+            respuesta =
+`🍖 Productos disponibles
+- Alimento premium
+- Snacks naturales
+- Shampoo veterinario
+
+Escribe "menu" para volver`;
         }
 
+        // ================= CONSULTA MÉDICA (NUEVO) =================
         else if (text === "3") {
-            respuesta = "👩‍⚕️ Asesor te contactará pronto";
+
+            respuesta =
+`🩺 Consulta médica veterinaria
+
+Describe el síntoma de tu mascota y un veterinario te responderá.
+
+Ejemplo:
+"mi perro no quiere comer"`;
+
+        }
+
+        // ================= ASESOR =================
+        else if (text === "4") {
+            respuesta = "👩‍⚕️ Un asesor te contactará pronto.";
         }
 
         // ================= IA =================
@@ -173,33 +204,34 @@ app.post("/webhook", async (req, res) => {
             try {
 
                 if (client) {
+
                     const completion = await client.chat.completions.create({
                         model: "openai/gpt-4o-mini",
                         messages: [
                             {
                                 role: "system",
-                                content: "Eres asistente de veterinaria. Responde corto."
+                                content:
+`Eres un veterinario virtual de una petshop.
+Responde corto, claro y profesional.
+Si es un síntoma grave, recomienda ir a consulta.`
                             },
-                            {
-                                role: "user",
-                                content: text
-                            }
+                            { role: "user", content: text }
                         ]
                     });
 
                     respuesta = completion.choices[0].message.content;
 
                 } else {
-                    respuesta = "🤖 IA no disponible";
+                    respuesta = "🤖 Servicio no disponible";
                 }
 
             } catch (e) {
                 console.log("IA error:", e.message);
-                respuesta = "⚠️ Error en IA";
+                respuesta = "⚠️ Intenta de nuevo";
             }
         }
 
-        // ================= ENVIAR WHATSAPP =================
+        // ================= ENVIAR =================
         await axios.post(
             "https://graph.facebook.com/v22.0/1168848789639885/messages",
             {
