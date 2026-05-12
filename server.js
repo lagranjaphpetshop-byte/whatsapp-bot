@@ -79,58 +79,62 @@ app.post("/webhook", async (req, res) => {
 
         let respuesta = "";
 
-        // ================= MENU PRINCIPAL =================
-        if (text === "hola" || text === "menu") {
+// ================= MENU =================
+if (text === "hola" || text === "menu") {
 
-            usuarios[from].paso = "";
+    usuarios[from].paso = "";
 
-            respuesta =
-`🐾 La Granja PH
+    respuesta =
+`🐾 BienvenidoLa GranjaPH soy tu asesor virtualen que puedo ayudarte hoy
 
 1️⃣ Agendar baño y grooming
 2️⃣ Productos
-3️⃣ Consulta médica veterinaria
-4️⃣ Hablar con asesor`;
+3️⃣ Consulta médica
+4️⃣ Asesor`;
 
-        }
+}
 
-        // ================= OPCIÓN 1 =================
-        else if (text === "1") {
+// ================= FLUJO CONTROLADO POR PASO =================
 
-            usuarios[from].paso = "nombre";
+// INICIAR SOLO SI ESTÁ EN MENÚ
+else if (usuarios[from].paso === "" && text === "1") {
 
-            respuesta = "📝 ¿Cuál es tu nombre?";
-        }
+    usuarios[from].paso = "nombre";
+    respuesta = "📝 ¿Cuál es tu nombre?";
 
-        else if (usuarios[from].paso === "nombre") {
+}
 
-            usuarios[from].nombre = text;
-            usuarios[from].paso = "mascota";
+// NOMBRE
+else if (usuarios[from].paso === "nombre") {
 
-            respuesta = "🐶 Nombre de tu mascota:";
-        }
+    usuarios[from].nombre = text;
+    usuarios[from].paso = "mascota";
 
-        else if (usuarios[from].paso === "mascota") {
+    respuesta = "🐶 Nombre de tu mascota:";
+}
 
-            usuarios[from].mascota = text;
-            usuarios[from].paso = "fecha";
+// MASCOTA
+else if (usuarios[from].paso === "mascota") {
 
-            respuesta = "📅 Escribe la fecha (YYYY-MM-DD)";
-        }
+    usuarios[from].mascota = text;
+    usuarios[from].paso = "fecha";
 
-        else if (usuarios[from].paso === "fecha") {
+    respuesta = "📅 Escribe la fecha asi (YYYY-MM-DD)";
+}
 
-            usuarios[from].fecha = text;
-            usuarios[from].paso = "hora";
+// FECHA
+else if (usuarios[from].paso === "fecha") {
 
-            respuesta =
-`⏰ Horarios:
+    usuarios[from].fecha = text;
+    usuarios[from].paso = "hora";
+
+    respuesta =
+`⏰ Horarios disponibles:
 1️⃣ 9am
 2️⃣ 11am
 3️⃣ 2pm
 4️⃣ 4pm`;
-        }
-
+}
         else if (usuarios[from].paso === "hora") {
 
             const horarios = {
