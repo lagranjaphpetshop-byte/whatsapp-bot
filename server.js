@@ -7,17 +7,9 @@ const OpenAI = require("openai");
 const app = express();
 app.use(bodyParser.json());
 
-// =========================
-// VARIABLES DE ENTORNO
-// =========================
-
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
-
-// =========================
-// OPENROUTER (SEGURO)
-// =========================
 
 let client = null;
 
@@ -28,11 +20,8 @@ if (process.env.OPENROUTER_API_KEY) {
     });
 }
 
-// =========================
-// USUARIOS EN MEMORIA
-// =========================
-
 const usuarios = {};
+const processedMessages = new Set();
 
 // =========================
 // WEBHOOK VERIFY
@@ -44,14 +33,13 @@ app.get("/webhook", (req, res) => {
     const verifyToken = req.query["hub.verify_token"];
 
     if (mode && verifyToken === verify_token) {
-        res.status(200).send(challenge);
-    } else {
-        res.sendStatus(403);
+        return res.status(200).send(challenge);
     }
+    return res.sendStatus(403);
 });
 
 // =========================
-// RECIBIR MENSAJES
+// WEBHOOK POST
 // =========================
 
 app.post("/webhook", async (req, res) => {
@@ -62,6 +50,10 @@ app.post("/webhook", async (req, res) => {
             req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
         if (!message) return;
+
+        const msgId = message.id;
+        if (processedMessages.has(msgId)) return;
+        processedMessages.add(msgId);
 
         const from = message.from;
         const text = message.text?.body?.toLowerCase().trim() || "";
@@ -78,23 +70,13 @@ app.post("/webhook", async (req, res) => {
 
         let respuesta = "";
 
-        // =========================
-        // MENÚ
-        // =========================
-
+        // ================= MENU =================
         if (text === "hola" || text === "menu") {
             usuarios[from].paso = "";
-            respuesta = `🐾 Bienvenido a La Granja PH
-
-1️⃣ Agendar baño
-2️⃣ Productos
-3️⃣ Asesor`;
+            respuesta = "🐾 Bienvenido a La Granja PH\n\n1️⃣ Agendar baño\n2️⃣ Productos\n3️⃣ Asesor";
         }
 
-        // =========================
-        // INICIO AGENDAMIENTO
-        // =========================
-
+        // ================= FLUJO =================
         else if (text === "1" && usuarios[from].paso === "") {
             usuarios[from].paso = "nombre";
             respuesta = "📝 ¿Cuál es tu nombre?";
@@ -103,25 +85,20 @@ app.post("/webhook", async (req, res) => {
         else if (usuarios[from].paso === "nombre") {
             usuarios[from].nombre = text;
             usuarios[from].paso = "mascota";
-            respuesta = "🐶 ¿Nombre de tu mascota?";
+            respuesta = "🐶 Nombre de tu mascota?";
         }
 
         else if (usuarios[from].paso === "mascota") {
             usuarios[from].mascota = text;
             usuarios[from].paso = "fecha";
-            respuesta = "📅 Escribe la fecha (YYYY-MM-DD)";
+            respuesta = "📅 Fecha (YYYY-MM-DD)";
         }
 
         else if (usuarios[from].paso === "fecha") {
             usuarios[from].fecha = text;
             usuarios[from].paso = "hora";
 
-            respuesta = `⏰ Horarios:
-
-1️⃣ 9:00 AM
-2️⃣ 11:00 AM
-3️⃣ 2:00 PM
-4️⃣ 4:00 PM`;
+            respuesta = "⏰ 1️⃣9am 2️⃣11am 3️⃣2pm 4️⃣4pm";
         }
 
         else if (usuarios[from].paso === "hora") {
@@ -133,7 +110,7 @@ app.post("/webhook", async (req, res) => {
             };
 
             if (!horarios[text]) {
-                respuesta = "❌ Opción inválida. Elige 1-4.";
+                respuesta = "❌ Opción inválida (1-4)";
             } else {
                 usuarios[from].hora = horarios[text];
 
@@ -147,94 +124,72 @@ app.post("/webhook", async (req, res) => {
                     });
 
                     if (resultado.data?.disponible) {
-                        respuesta = `✅ Cita agendada
-
-👤 ${usuarios[from].nombre}
-🐶 ${usuarios[from].mascota}
-📅 ${usuarios[from].fecha}
-⏰ ${usuarios[from].hora}`;
-
+                        respuesta = `✅ Cita confirmada `;
                         delete usuarios[from];
                     } else {
-                        respuesta = "❌ Horario ocupado, intenta otro.";
+                        respuesta = "❌ Horario ocupado";
                     }
 
                 } catch (e) {
-                    respuesta = "❌ Error con agenda, intenta más tarde.";
+                    respuesta = "⚠️ Error guardando cita";
                 }
             }
         }
 
-        // =========================
-        // PRODUCTOS
-        // =========================
-
         else if (text === "2") {
-            respuesta = "🍖 Tenemos comida premium para perros y gatos.";
+            respuesta = "🍖 Comida premium disponible";
         }
-
-        // =========================
-        // ASESOR
-        // =========================
 
         else if (text === "3") {
-            respuesta = "👩‍⚕️ Un asesor te responderá pronto.";
+            respuesta = "👩‍⚕️ Asesor te contactará pronto";
         }
 
-        // =========================
-        // IA (SEGURA)
-        // =========================
-
+        // ================= IA =================
         else {
-            if (client) {
-                const completion = await client.chat.completions.create({
-                    model: "openai/gpt-4o-mini",
-                    messages: [
-                        {
-                            role: "system",
-                            content:
-                                "Eres el asistente de una veterinaria. Responde corto y amable."
-                        },
-                        {
-                            role: "user",
-                            content: text
-                        }
-                    ]
-                });
+            try {
+                if (client) {
+                    const completion = await client.chat.completions.create({
+                        model: "openai/gpt-4o-mini",
+                        messages: [
+                            {
+                                role: "system",
+                                content: "Eres asistente de veterinaria. Respuestas cortas."
+                            },
+                            {
+                                role: "user",
+                                content: text
+                            }
+                        ]
+                    });
 
-                respuesta = completion.choices[0].message.content;
-            } else {
-                respuesta = "🤖 IA no disponible en este momento.";
+                    respuesta = completion.choices[0].message.content;
+                } else {
+                    respuesta = "🤖 IA no disponible";
+                }
+            } catch (e) {
+                respuesta = "⚠️ Error en IA, intenta otra vez";
             }
         }
-
-        // =========================
-        // ENVIAR WHATSAPP
-        // =========================
 
         await axios.post(
             "https://graph.facebook.com/v22.0/1168848789639885/messages",
             {
                 messaging_product: "whatsapp",
                 to: from,
-                type: "text",
                 text: { body: respuesta }
             },
             {
                 headers: {
-                    Authorization: `Bearer ${token} `,
-                    "Content-Type": "application/json"
+                    Authorization: `Bearer ${token} `
                 }
             }
         );
 
     } catch (error) {
-        console.log("ERROR:", error.response?.data || error.message);
+        console.log("ERROR:", error.message);
     }
 });
 
-// =========================
-// SERVER
 // =========================
 
 const PORT = process.env.PORT || 3000;
