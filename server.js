@@ -10,6 +10,7 @@ app.use(express.json());
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 // ================= IA =================
 let client = null;
@@ -45,9 +46,10 @@ app.get("/webhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
   const verifyToken = req.query["hub.verify_token"];
 
-  if (mode && verifyToken === verify_token) {
+  if (mode === "subscribe" && verifyToken === verify_token) {
     return res.status(200).send(challenge);
   }
+
   return res.sendStatus(403);
 });
 
@@ -58,16 +60,27 @@ app.post("/webhook", async (req, res) => {
 
   try {
 
-    const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (!message) return;
+    const body = req.body;
+
+    if (!body.entry) return;
+
+    const change = body.entry[0].changes[0].value;
+
+    // 🔥 SOLO procesar mensajes reales
+    if (!change.messages) return;
+
+    const message = change.messages[0];
+
+    if (!message.text) return;
 
     const from = message.from;
-    const text = message.text?.body?.toLowerCase().trim() || "";
-		console.log("📩 MENSAJE:", from, text);
+    const text = message.text.body.trim().toLowerCase();
     const id = message.id;
 
     if (processed.has(id)) return;
     processed.add(id);
+
+    console.log("📩 MENSAJE:", from, text);
 
     // init user
     if (!users[from]) {
@@ -90,7 +103,7 @@ app.post("/webhook", async (req, res) => {
       users[from].step = "idle";
 
       reply =
-`🐾 La Granja PH
+`🐾 *La Granja PH*
 
 1️⃣ Agendar cita
 2️⃣ Productos
@@ -122,7 +135,7 @@ app.post("/webhook", async (req, res) => {
       users[from].step = "time";
 
       reply =
-`⏰ Horarios:
+`⏰ Horarios disponibles:
 
 1️⃣ 9:00 AM
 2️⃣ 11:00 AM
@@ -140,27 +153,31 @@ app.post("/webhook", async (req, res) => {
       };
 
       if (!slots[text]) {
-        reply = "❌ Elige 1-4";
+        reply = "❌ Elige un número del 1 al 4";
       } else {
 
         users[from].time = slots[text];
 
         try {
-          await axios.post(SHEET_URL, {
-            nombre: users[from].name,
-            mascota: users[from].pet,
-            servicio: "Baño y grooming",
-            fecha: users[from].date,
-            hora: users[from].time
-          });
+          if (SHEET_URL) {
+            await axios.post(SHEET_URL, {
+              nombre: users[from].name,
+              mascota: users[from].pet,
+              servicio: "Baño y grooming",
+              fecha: users[from].date,
+              hora: users[from].time
+            });
+          }
 
           reply =
-`✅ Cita confirmada
+`✅ *Cita confirmada*
 
 👤 ${users[from].name}
 🐶 ${users[from].pet}
 📅 ${users[from].date}
-⏰ ${users[from].time}`;
+⏰ ${users[from].time}
+
+Te esperamos 🐾`;
 
           users[from].step = "idle";
 
@@ -187,9 +204,8 @@ app.post("/webhook", async (req, res) => {
       reply = "🩺 Describe los síntomas de tu mascota.";
     }
 
-    // ================= FLUJO ASESOR/MÉDICO =================
     else if (users[from].step === "advisor") {
-      reply = "📩 Tu consulta fue enviada al asesor humano.";
+      reply = "📩 Tu mensaje fue enviado al asesor.";
     }
 
     else if (users[from].step === "medical") {
@@ -204,7 +220,7 @@ app.post("/webhook", async (req, res) => {
         messages: [
           {
             role: "system",
-            content: "Eres asistente veterinario. Respuestas cortas, claras y amables."
+            content: "Eres asistente veterinario de una petshop. Responde corto, amable y profesional."
           },
           { role: "user", content: text }
         ]
@@ -214,14 +230,14 @@ app.post("/webhook", async (req, res) => {
     }
 
     else {
-      reply = "Escribe menu para ver opciones 🐾";
+      reply = "Escribe *menu* para ver opciones 🐾";
     }
 
     addChat(from, reply, "bot");
 
-    // ================= SEND =================
+    // ================= SEND MESSAGE =================
     await axios.post(
-      "https://graph.facebook.com/v22.0/1168848789639885/messages",
+      `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: "whatsapp",
         to: from,
@@ -229,24 +245,25 @@ app.post("/webhook", async (req, res) => {
       },
       {
         headers: {
-          Authorization: ` Bearer ${token}`
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
         }
       }
     );
 
   } catch (err) {
-    console.log("ERROR:", err.message);
+    console.log("❌ ERROR:", err.response?.data || err.message);
   }
 });
 
-// ================= PANEL PRO =================
+// ================= PANEL =================
 app.get("/panel", (req, res) => {
 
-  let html = `<h1>📊 Panel La Granja PH</h1><hr/> `;
+  let html = `<h1>📊 Panel La Granja PH</h1><hr/>`;
 
   for (let user in chats) {
 
-    html += ` <h3>📱 ${user}</h3>`;
+    html += `<h3>📱 ${user}</h3>`;
 
     chats[user].slice(-10).forEach(m => {
 
