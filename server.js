@@ -91,7 +91,7 @@ app.post("/webhook", async (req, res) => {
             users[from].step = "idle";
 
             reply =
-`🐾 La Granja PH
+`🐾 bienvenidos La Granja PH
 
 1️⃣ Agendar cita
 2️⃣ Productos
