@@ -1,86 +1,104 @@
 require("dotenv").config();
 const express = require("express");
+const bodyParser = require("body-parser");
 const axios = require("axios");
-const { google } = require("googleapis");
+const OpenAI = require("openai");
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-// ================= ENV =================
-const TOKEN = process.env.TOKEN_WHATSAPP;
-const VERIFY = process.env.VERIFY_TOKEN;
-const SHEET_URL = process.env.SHEET_URL;
-
-// ================= MEMORY =================
-const users = {};
-const processed = new Set();
-
-// ================= GOOGLE CALENDAR =================
-let calendar = null;
-
-try {
-    const auth = new google.auth.GoogleAuth({
-        keyFile: "credentials.json",
-        scopes: ["https://www.googleapis.com/auth/calendar"]
-    });
-
-    calendar = google.calendar({ version: "v3", auth });
-
-    console.log("📅 Calendar conectado");
-
-} catch (e) {
-    console.log("⚠️ Calendar no conectado");
-}
-
-// ================= VERIFY WEBHOOK =================
-app.get("/webhook", (req, res) => {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
-
-    if (mode && token === VERIFY) {
-        return res.status(200).send(challenge);
-    }
-
-    res.sendStatus(403);
+// =========================
+// ENV CHECK
+// =========================
+console.log("ENV CHECK:", {
+  TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
+  VERIFY_TOKEN: !!process.env.VERIFY_TOKEN,
+  OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
+  SHEET_URL: !!process.env.SHEET_URL
 });
 
-// ================= WEBHOOK =================
+const token = process.env.TOKEN_WHATSAPP;
+const verify_token = process.env.VERIFY_TOKEN;
+const SHEET_URL = process.env.SHEET_URL;
+
+// =========================
+// IA (OpenRouter)
+// =========================
+let client = null;
+
+if (process.env.OPENROUTER_API_KEY) {
+  client = new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY,
+  });
+}
+
+// =========================
+// MEMORY DB
+// =========================
+const users = {};
+const chats = {};
+const processed = new Set();
+
+// =========================
+// WEBHOOK VERIFY
+// =========================
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = req.query["hub.verify_token"];
+
+  if (mode && verifyToken === verify_token) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// =========================
+// WEBHOOK RECEIVE
+// =========================
 app.post("/webhook", async (req, res) => {
 
-    res.sendStatus(200);
+  console.log("📩 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
 
-    const body = req.body;
+  res.sendStatus(200);
 
-    const message = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  try {
+
+    const value = req.body.entry?.[0]?.changes?.[0]?.value;
+    const message = value?.messages?.[0];
 
     if (!message) return;
 
     const from = message.from;
-    const text = message.text?.body?.toLowerCase().trim();
+    const text = message.text?.body?.toLowerCase().trim() || "";
     const id = message.id;
 
+    // evitar duplicados
     if (processed.has(id)) return;
     processed.add(id);
 
+    // init user
     if (!users[from]) {
-        users[from] = {
-            step: "idle",
-            name: "",
-            pet: "",
-            date: "",
-            time: ""
-        };
+      users[from] = { step: "", name: "", pet: "", date: "", time: "" };
     }
+
+    // init chat log
+    if (!chats[from]) chats[from] = [];
+
+    // guardar mensaje
+    chats[from].push({
+      from,
+      text,
+      time: new Date().toISOString()
+    });
 
     let reply = "";
 
     // ================= MENU =================
     if (text === "hola" || text === "menu") {
-        users[from].step = "idle";
-
-        reply =
-`🐾 La Granja PH
+      users[from].step = "";
+      reply = `🐾 La Granja PH
 
 1️⃣ Agendar cita
 2️⃣ Productos
@@ -88,139 +106,154 @@ app.post("/webhook", async (req, res) => {
 4️⃣ Consulta médica`;
     }
 
-    // ================= START =================
-    else if (text === "1" && users[from].step === "idle") {
-        users[from].step = "name";
-        reply = "👤 ¿Tu nombre?";
+    // ================= AGENDA =================
+   else if (text === "1" && !users[from].step) {
+      users[from].step = "name";
+      reply = "👤 ¿Tu nombre?";
     }
 
     else if (users[from].step === "name") {
-        users[from].name = text;
-        users[from].step = "pet";
-        reply = "🐶 Nombre de tu mascota";
+      users[from].name = text;
+      users[from].step = "pet";
+      reply = "🐶 Nombre de tu mascota?";
     }
 
     else if (users[from].step === "pet") {
-        users[from].pet = text;
-        users[from].step = "date";
-        reply = "📅 Fecha (YYYY-MM-DD)";
+      users[from].pet = text;
+      users[from].step = "date";
+      reply = "📅 Fecha (YYYY-MM-DD)";
     }
 
     else if (users[from].step === "date") {
-        users[from].date = text;
-        users[from].step = "time";
-
-        reply =
-`⏰ Horarios:
-1️⃣ 9am
-2️⃣ 11am
-3️⃣ 2pm
-4️⃣ 4pm`;
+      users[from].date = text;
+      users[from].step = "time";
+      reply = "⏰ 1=9am 2=11am 3=2pm 4=4pm";
     }
 
-    // ================= TIME =================
     else if (users[from].step === "time") {
 
-        const slots = {
-            "1": "09:00:00",
-            "2": "11:00:00",
-            "3": "14:00:00",
-            "4": "16:00:00"
-        };
+      const slots = {
+        "1": "9:00 AM",
+        "2": "11:00 AM",
+        "3": "2:00 PM",
+        "4": "4:00 PM"
+      };
 
-        if (!slots[text]) {
-            reply = "❌ Elige 1-4";
-        } else {
+      if (!slots[text]) {
+        reply = "❌ Elige 1-4";
+      } else {
 
-            users[from].time = slots[text];
+        users[from].time = slots[text];
 
-            const start = `${users[from].date}T${users[from].time} `;
+        try {
+          const r = await axios.post(SHEET_URL, {
+            nombre: users[from].name,
+            mascota: users[from].pet,
+            servicio: "Baño",
+            fecha: users[from].date,
+            hora: users[from].time
+          });
 
-            const end = `${users[from].date}T${users[from].time} `;
+          reply = ` ✅ Cita confirmada para ${users[from].pet}`;
 
-            // ================= SHEETS =================
-            try {
-                await axios.post(SHEET_URL, {
-                    nombre: users[from].name,
-                    mascota: users[from].pet,
-                    fecha: users[from].date,
-                    hora: users[from].time
-                });
-            } catch (e) {
-                console.log("Sheets error");
-            }
+          delete users[from];
 
-            // ================= CALENDAR =================
-            try {
-                if (calendar) {
-                    await calendar.events.insert({
-                        calendarId: "primary",
-                        requestBody: {
-                            summary: ` Cita - ${users[from].pet}`,
-                            description: `Cliente: ${users[from].name} `,
-                            start: {
-                                dateTime: start,
-                                timeZone: "America/Bogota"
-                            },
-                            end: {
-                                dateTime: end,
-                                timeZone: "America/Bogota"
-                            }
-                        }
-                    });
-                }
-            } catch (e) {
-                console.log("Calendar error");
-            }
-
-            reply = `✅ Cita confirmada para ${users[from].pet} `;
-
-            users[from].step = "idle";
+        } catch (e) {
+          reply = "⚠️ Error guardando cita";
         }
+      }
     }
 
-    // ================= OTRAS OPCIONES =================
+    // ================= PRODUCTOS =================
     else if (text === "2") {
-        reply = "🍖 Tenemos comida premium para perros y gatos";
+      reply = "🍖 Tenemos comida premium para perros y gatos";
     }
 
-    else if (text === "3") {
-        reply = "👩‍⚕️ Un asesor te contactará pronto";
+    // ================= ASESOR =================
+    else if (text === "3" || text.includes("asesor") || text.includes("humano")) {
+
+      users[from].step = "advisor";
+
+      reply = "👩‍⚕️ Un asesor te atenderá pronto. Escribe tu consulta.";
     }
 
-    else if (text === "4") {
-        reply = "🩺 Escribe el problema de tu mascota";
+    // ================= CONSULTA MÉDICA =================
+    else if (text === "4" || users[from].step === "advisor") {
+
+      reply = "🩺 Describe el problema de tu mascota y un veterinario te responde.";
+
     }
 
     // ================= IA =================
     else {
-        reply = "🤖 Escribe 'menu' para ver opciones";
-    }
 
-    // ================= SEND WHATSAPP =================
-    try {
-        await axios.post(
-            "https://graph.facebook.com/v22.0/1168848789639885/messages",
+      if (client) {
+        const completion = await client.chat.completions.create({
+          model: "openai/gpt-4o-mini",
+          messages: [
             {
-                messaging_product: "whatsapp",
-                to: from,
-                text: { body: reply }
+              role: "system",
+              content: "Eres asistente de veterinaria. Respuestas cortas."
             },
-            {
-                headers: {
-                    Authorization: `Bearer ${TOKEN} `
-                }
-            }
-        );
-    } catch (e) {
-        console.log("WhatsApp error");
+            { role: "user", content: text }
+          ]
+        });
+
+        reply = completion.choices[0].message.content;
+      } else {
+        reply = "🤖 IA no disponible";
+      }
     }
 
+    // enviar WhatsApp
+    await axios.post(
+      "https://graph.facebook.com/v22.0/1168848789639885/messages",
+      {
+        messaging_product: "whatsapp",
+        to: from,
+        text: { body: reply }
+      },
+      {
+        headers: {
+          Authorization: ` Bearer ${token}`
+        }
+      }
+    );
+
+    console.log("✔️ respuesta enviada");
+
+  } catch (err) {
+    console.log("ERROR:", err.message);
+  }
 });
 
-// ================= START =================
+// =========================
+// PANEL WEB (WHATSAPP BUSINESS STYLE)
+// =========================
+app.get("/panel", (req, res) => {
+
+  let html = ` <h1>📊 PANEL LA GRANJA PH</h1>`;
+  html += `<p>Total chats: ${Object.keys(chats).length}</p><hr/> `;
+
+  for (let user in chats) {
+
+    html += ` <h3>📱 ${user}</h3>`;
+
+    chats[user].slice(-15).forEach(m => {
+      html += `<p><b>${m.from}</b>: ${m.text}<br><small>${m.time}</small></p> `;
+    });
+
+    html += "<hr/>";
+  }
+
+  res.send(html);
+});
+
+// =========================
+// START SERVER
+// =========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log("🚀 Bot activo en puerto", PORT);
+  console.log("🚀 Servidor corriendo en puerto", PORT);
 });
