@@ -9,8 +9,8 @@ app.use(express.json());
 // ================= ENV =================
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
-const SHEET_URL = process.env.SHEET_URL;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const SHEET_URL = process.env.SHEET_URL;
 
 // ================= IA =================
 let client = null;
@@ -27,107 +27,96 @@ const users = {};
 const chats = {};
 const processed = new Set();
 
-// ================= CHAT LOG =================
-function addChat(from, text, role = "user") {
+// ================= CHAT MEMORY =================
+function addChat(from, role, content) {
   if (!chats[from]) chats[from] = [];
 
   chats[from].push({
     role,
-    text,
-    time: new Date().toISOString()
+    content,
   });
 
-  if (chats[from].length > 50) chats[from].shift();
+  if (chats[from].length > 15) chats[from].shift();
 }
 
-// ================= VERIFY WEBHOOK =================
+// ================= VERIFY =================
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const challenge = req.query["hub.challenge"];
   const verifyToken = req.query["hub.verify_token"];
 
-  if (mode === "subscribe" && verifyToken === verify_token) {
+  if (mode && verifyToken === verify_token) {
     return res.status(200).send(challenge);
   }
-
   return res.sendStatus(403);
 });
 
 // ================= WEBHOOK =================
 app.post("/webhook", async (req, res) => {
-
   res.sendStatus(200);
 
   try {
+    const value = req.body.entry?.[0]?.changes?.[0]?.value;
+    if (!value || !value.messages) return;
 
-    const body = req.body;
-
-    if (!body.entry) return;
-
-    const change = body.entry[0].changes[0].value;
-
-    // 🔥 SOLO procesar mensajes reales
-    if (!change.messages) return;
-
-    const message = change.messages[0];
-
+    const message = value.messages[0];
     if (!message.text) return;
 
     const from = message.from;
-    const text = message.text.body.trim().toLowerCase();
+    const text = message.text.body.toLowerCase().trim();
     const id = message.id;
 
     if (processed.has(id)) return;
     processed.add(id);
 
-    console.log("📩 MENSAJE:", from, text);
+    if (processed.size > 1000) processed.clear();
 
-    // init user
+    const timestamp = parseInt(message.timestamp);
+    const now = Math.floor(Date.now() / 1000);
+    if (now - timestamp > 20) return;
+
     if (!users[from]) {
-      users[from] = {
-        step: "idle",
-        name: "",
-        pet: "",
-        date: "",
-        time: ""
-      };
+      users[from] = { step: "idle" };
     }
 
-    addChat(from, text, "user");
+    addChat(from, "user", text);
 
     let reply = "";
 
-    // ================= MENU =================
-    if (text === "hola" || text === "menu") {
+    // ================= SALUDO AUTOMÁTICO =================
+    if (["hola", "buenas", "menu", "buenos dias", "buenas tardes"].includes(text)) {
 
       users[from].step = "idle";
 
       reply =
-`🐾 *La Granja PH*
+`🐾 *Bienvenido a La Granja PH* 🐾
 
-1️⃣ Agendar cita
-2️⃣ Productos
-3️⃣ Asesor humano
-4️⃣ Consulta médica`;
+Estamos felices de atenderte 💚
 
+1️⃣ Agendar baño o grooming  
+2️⃣ Ver productos disponibles  
+3️⃣ Consulta veterinaria  
+4️⃣ Hablar con asesor humano  
+
+Escribe el número de la opción que deseas 😊`;
     }
 
     // ================= AGENDAR =================
-    else if (text === "1" && users[from].step === "idle") {
+    else if (text === "1") {
       users[from].step = "name";
-      reply = "👤 ¿Cuál es tu nombre?";
+      reply = "👤 ¡Perfecto! ¿Cuál es tu nombre?";
     }
 
     else if (users[from].step === "name") {
       users[from].name = text;
       users[from].step = "pet";
-      reply = "🐶 ¿Nombre de tu mascota?";
+      reply = "🐶 ¿Cómo se llama tu mascota?";
     }
 
     else if (users[from].step === "pet") {
       users[from].pet = text;
       users[from].step = "date";
-      reply = "📅 Fecha (YYYY-MM-DD)";
+      reply = "📅 Indícanos la fecha deseada (YYYY-MM-DD)";
     }
 
     else if (users[from].step === "date") {
@@ -135,12 +124,14 @@ app.post("/webhook", async (req, res) => {
       users[from].step = "time";
 
       reply =
-`⏰ Horarios disponibles:
+`⏰ Estos son los horarios disponibles:
 
-1️⃣ 9:00 AM
-2️⃣ 11:00 AM
-3️⃣ 2:00 PM
-4️⃣ 4:00 PM`;
+1️⃣ 9:00 AM  
+2️⃣ 11:00 AM  
+3️⃣ 2:00 PM  
+4️⃣ 4:00 PM
+
+Elige el número del horario 😊`;
     }
 
     else if (users[from].step === "time") {
@@ -153,89 +144,94 @@ app.post("/webhook", async (req, res) => {
       };
 
       if (!slots[text]) {
-        reply = "❌ Elige un número del 1 al 4";
+        reply = "❌ Por favor elige un número entre 1 y 4 😊";
       } else {
 
         users[from].time = slots[text];
 
         try {
-          if (SHEET_URL) {
-            await axios.post(SHEET_URL, {
-              nombre: users[from].name,
-              mascota: users[from].pet,
-              servicio: "Baño y grooming",
-              fecha: users[from].date,
-              hora: users[from].time
-            });
-          }
+          await axios.post(SHEET_URL, {
+            nombre: users[from].name,
+            mascota: users[from].pet,
+            fecha: users[from].date,
+            hora: users[from].time
+          });
 
           reply =
-`✅ *Cita confirmada*
+`✅ *Cita confirmada con éxito* 🐾
 
-👤 ${users[from].name}
-🐶 ${users[from].pet}
-📅 ${users[from].date}
+👤 ${users[from].name}  
+🐶 ${users[from].pet}  
+📅 ${users[from].date}  
 ⏰ ${users[from].time}
 
-Te esperamos 🐾`;
+Te esperamos 💚`;
 
           users[from].step = "idle";
 
         } catch (e) {
-          reply = "⚠️ Error guardando cita";
+          reply = "⚠️ Ocurrió un error al guardar la cita. Intentemos nuevamente.";
         }
       }
     }
 
     // ================= PRODUCTOS =================
     else if (text === "2") {
-      reply = "🍖 Tenemos comida premium, accesorios y snacks para mascotas 🐶";
+      reply =
+`🍖 Tenemos disponibles:
+
+• Comida premium  
+• Snacks naturales  
+• Accesorios  
+• Juguetes  
+• Antipulgas  
+
+¿Buscas algo en especial? 😊`;
     }
 
-    // ================= ASESOR =================
+    // ================= VETERINARIA =================
     else if (text === "3") {
-      users[from].step = "advisor";
-      reply = "👩‍⚕️ Un asesor humano te responderá pronto. Escribe tu consulta.";
-    }
-
-    // ================= CONSULTA MÉDICA =================
-    else if (text === "4") {
       users[from].step = "medical";
-      reply = "🩺 Describe los síntomas de tu mascota.";
-    }
-
-    else if (users[from].step === "advisor") {
-      reply = "📩 Tu mensaje fue enviado al asesor.";
+      reply = "🩺 Cuéntanos qué síntomas presenta tu mascota y te orientamos con gusto.";
     }
 
     else if (users[from].step === "medical") {
-      reply = "🩺 Un veterinario revisará tu caso pronto.";
+      reply = "🩺 Gracias por la información. Un veterinario revisará tu caso y te responderá pronto.";
+      users[from].step = "idle";
     }
 
-    // ================= IA =================
-    else if (users[from].step === "idle" && client) {
+    // ================= ASESOR =================
+    else if (text === "4") {
+      reply = "👩‍💼 Un asesor humano te responderá en breve. Gracias por tu paciencia 😊";
+    }
+
+    // ================= IA INTELIGENTE =================
+    else if (client) {
 
       const completion = await client.chat.completions.create({
         model: "openai/gpt-4o-mini",
         messages: [
           {
             role: "system",
-            content: "Eres asistente veterinario de una petshop. Responde corto, amable y profesional."
+            content:
+              "Eres asistente profesional de un petshop llamado La Granja PH en Colombia. Responde amable, claro, corto y útil. Si es emergencia veterinaria, recomienda acudir a urgencias."
           },
-          { role: "user", content: text }
-        ]
+          ...chats[from].map(m => ({
+            role: m.role,
+            content: m.content
+          }))
+        ],
       });
 
       reply = completion.choices[0].message.content;
     }
 
     else {
-      reply = "Escribe *menu* para ver opciones 🐾";
+      reply = "Escribe *menu* para ver las opciones disponibles 🐾";
     }
 
-    addChat(from, reply, "bot");
+    addChat(from, "assistant", reply);
 
-    // ================= SEND MESSAGE =================
     await axios.post(
       `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,
       {
@@ -245,44 +241,18 @@ Te esperamos 🐾`;
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
+          Authorization: `Bearer ${token}`
         }
       }
     );
 
   } catch (err) {
-    console.log("❌ ERROR:", err.response?.data || err.message);
+    console.log("ERROR:", err.response?.data || err.message);
   }
 });
 
-// ================= PANEL =================
-app.get("/panel", (req, res) => {
-
-  let html = `<h1>📊 Panel La Granja PH</h1><hr/>`;
-
-  for (let user in chats) {
-
-    html += `<h3>📱 ${user}</h3>`;
-
-    chats[user].slice(-10).forEach(m => {
-
-      html += `
-      <div style="padding:5px;margin:5px;background:${m.role === "user" ? "#e3f2fd" : "#e8f5e9"}">
-        <b>${m.role === "user" ? "Cliente" : "Bot"}:</b> ${m.text}
-        <br><small>${m.time}</small>
-      </div>`;
-    });
-
-    html += "<hr/>";
-  }
-
-  res.send(html);
-});
-
-// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("🚀 Bot activo en puerto", PORT);
+  console.log("🚀 Bot profesional activo en puerto", PORT);
 });
