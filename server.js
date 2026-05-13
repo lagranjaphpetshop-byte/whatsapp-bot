@@ -27,14 +27,9 @@ const users = {};
 const chats = {};
 const processed = new Set();
 
-// ================= CHAT MEMORY =================
 function addChat(from, role, content) {
   if (!chats[from]) chats[from] = [];
-
-  chats[from].push({
-    role,
-    content,
-  });
+  chats[from].push({ role, content });
 
   if (chats[from].length > 15) chats[from].shift();
 }
@@ -68,7 +63,6 @@ app.post("/webhook", async (req, res) => {
 
     if (processed.has(id)) return;
     processed.add(id);
-
     if (processed.size > 1000) processed.clear();
 
     const timestamp = parseInt(message.timestamp);
@@ -83,40 +77,18 @@ app.post("/webhook", async (req, res) => {
 
     let reply = "";
 
-    // ================= SALUDO AUTOMÁTICO =================
-    if (["hola", "buenas", "menu", "buenos dias", "buenas tardes"].includes(text)) {
+    // ===================== FLUJOS PRIORIDAD =====================
 
-      users[from].step = "idle";
-
-      reply =
-`🐾 *Bienvenido a La Granja PH* 🐾
-
-Estamos felices de atenderte 💚
-
-1️⃣ Agendar baño o grooming  
-2️⃣ Ver productos disponibles  
-3️⃣ Consulta veterinaria  
-4️⃣ Hablar con asesor humano  
-
-Escribe el número de la opción que deseas 😊`;
-    }
-
-    // ================= AGENDAR =================
-    else if (text === "1") {
-      users[from].step = "name";
-      reply = "👤 ¡Perfecto! ¿Cuál es tu nombre?";
-    }
-
-    else if (users[from].step === "name") {
+    if (users[from].step === "name") {
       users[from].name = text;
       users[from].step = "pet";
-      reply = "🐶 ¿Cómo se llama tu mascota?";
+      reply = "🐶 Perfecto 😊 ¿Cómo se llama tu mascota?";
     }
 
     else if (users[from].step === "pet") {
       users[from].pet = text;
       users[from].step = "date";
-      reply = "📅 Indícanos la fecha deseada (YYYY-MM-DD)";
+      reply = "📅 ¿Para qué fecha deseas el baño? (Ej: 2026-05-20)";
     }
 
     else if (users[from].step === "date") {
@@ -124,14 +96,14 @@ Escribe el número de la opción que deseas 😊`;
       users[from].step = "time";
 
       reply =
-`⏰ Estos son los horarios disponibles:
+`⏰ Horarios disponibles:
 
 1️⃣ 9:00 AM  
 2️⃣ 11:00 AM  
 3️⃣ 2:00 PM  
-4️⃣ 4:00 PM
+4️⃣ 4:00 PM  
 
-Elige el número del horario 😊`;
+Escribe el número del horario 😊`;
     }
 
     else if (users[from].step === "time") {
@@ -144,7 +116,7 @@ Elige el número del horario 😊`;
       };
 
       if (!slots[text]) {
-        reply = "❌ Por favor elige un número entre 1 y 4 😊";
+        reply = "❌ Por favor elige un número del 1 al 4 😊";
       } else {
 
         users[from].time = slots[text];
@@ -153,59 +125,95 @@ Elige el número del horario 😊`;
           await axios.post(SHEET_URL, {
             nombre: users[from].name,
             mascota: users[from].pet,
+            servicio: "Baño y grooming",
             fecha: users[from].date,
             hora: users[from].time
           });
 
           reply =
-`✅ *Cita confirmada con éxito* 🐾
+`✅ *Cita confirmada* 🐾
 
 👤 ${users[from].name}  
 🐶 ${users[from].pet}  
 📅 ${users[from].date}  
 ⏰ ${users[from].time}
 
-Te esperamos 💚`;
+¡Te esperamos en La Granja PH! 💚`;
 
           users[from].step = "idle";
 
         } catch (e) {
-          reply = "⚠️ Ocurrió un error al guardar la cita. Intentemos nuevamente.";
+          reply = "⚠️ Hubo un error guardando la cita. Intenta nuevamente.";
         }
       }
     }
 
-    // ================= PRODUCTOS =================
-    else if (text === "2") {
-      reply =
-`🍖 Tenemos disponibles:
-
-• Comida premium  
-• Snacks naturales  
-• Accesorios  
-• Juguetes  
-• Antipulgas  
-
-¿Buscas algo en especial? 😊`;
+    else if (users[from].step === "medical") {
+      reply = "🩺 Gracias por la información. Nuestro veterinario revisará tu caso y te responderá pronto.";
+      users[from].step = "idle";
     }
 
-    // ================= VETERINARIA =================
-    else if (text === "3") {
+    // ===================== MENÚ PRINCIPAL =====================
+
+    else if (["hola","menu","buenas","buenos dias","buenas tardes"].includes(text)) {
+
+      users[from].step = "idle";
+
+      reply =
+`🐾 *Bienvenido a La Granja PH* 🐾
+
+1️⃣ Agendar baño o grooming  
+2️⃣ Ver comidas para perros  
+3️⃣ Consulta veterinaria  
+4️⃣ Hablar con asesor humano  
+
+Escribe el número de la opción 😊`;
+    }
+
+    else if (text === "1" && users[from].step === "idle") {
+      users[from].step = "name";
+      reply = "👤 ¡Genial! ¿Cuál es tu nombre?";
+    }
+
+    // ===================== PRODUCTOS REALES =====================
+
+    else if (text === "2" && users[from].step === "idle") {
+
+      reply =
+`🍖 *Comidas disponibles para perros:*
+
+🔹 Chunky Adulto / Cachorro  
+🔹 Dog Chow (Purina)  
+🔹 Pedigree Adulto y Puppy  
+🔹 Pro Plan (Premium)  
+🔹 Royal Canin (Especializadas)  
+🔹 Taste of the Wild  
+🔹 Monello  
+🔹 Hills Science Diet  
+
+Tenemos líneas para:
+✔ Cachorros  
+✔ Adultos  
+✔ Senior  
+✔ Razas pequeñas  
+✔ Razas grandes  
+✔ Perros con alergias  
+✔ Problemas digestivos  
+
+¿Para qué edad o necesidad buscas alimento? 😊`;
+    }
+
+    else if (text === "3" && users[from].step === "idle") {
       users[from].step = "medical";
       reply = "🩺 Cuéntanos qué síntomas presenta tu mascota y te orientamos con gusto.";
     }
 
-    else if (users[from].step === "medical") {
-      reply = "🩺 Gracias por la información. Un veterinario revisará tu caso y te responderá pronto.";
-      users[from].step = "idle";
-    }
-
-    // ================= ASESOR =================
-    else if (text === "4") {
+    else if (text === "4" && users[from].step === "idle") {
       reply = "👩‍💼 Un asesor humano te responderá en breve. Gracias por tu paciencia 😊";
     }
 
-    // ================= IA INTELIGENTE =================
+    // ===================== IA INTELIGENTE =====================
+
     else if (client) {
 
       const completion = await client.chat.completions.create({
@@ -214,7 +222,7 @@ Te esperamos 💚`;
           {
             role: "system",
             content:
-              "Eres asistente profesional de un petshop llamado La Granja PH en Colombia. Responde amable, claro, corto y útil. Si es emergencia veterinaria, recomienda acudir a urgencias."
+              "Eres asistente profesional de un petshop llamado La Granja PH en Colombia. Responde amable, clara y útil. Si es emergencia veterinaria grave, recomienda acudir a urgencias."
           },
           ...chats[from].map(m => ({
             role: m.role,
@@ -254,5 +262,5 @@ Te esperamos 💚`;
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("🚀 Bot profesional activo en puerto", PORT);
+  console.log("🚀 Bot profesional La Granja PH activo en puerto", PORT);
 });
