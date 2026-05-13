@@ -63,6 +63,7 @@ app.post("/webhook", async (req, res) => {
 
     const from = message.from;
     const text = message.text?.body?.toLowerCase().trim() || "";
+		console.log("📩 MENSAJE:", from, text);
     const id = message.id;
 
     if (processed.has(id)) return;
