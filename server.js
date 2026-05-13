@@ -1,29 +1,17 @@
 require("dotenv").config();
 const express = require("express");
-const bodyParser = require("body-parser");
 const axios = require("axios");
 const OpenAI = require("openai");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// =========================
-// ENV CHECK
-// =========================
-console.log("ENV CHECK:", {
-  TOKEN_WHATSAPP: !!process.env.TOKEN_WHATSAPP,
-  VERIFY_TOKEN: !!process.env.VERIFY_TOKEN,
-  OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
-  SHEET_URL: !!process.env.SHEET_URL
-});
-
+// ================= ENV =================
 const token = process.env.TOKEN_WHATSAPP;
 const verify_token = process.env.VERIFY_TOKEN;
 const SHEET_URL = process.env.SHEET_URL;
 
-// =========================
-// IA (OpenRouter)
-// =========================
+// ================= IA =================
 let client = null;
 
 if (process.env.OPENROUTER_API_KEY) {
@@ -33,16 +21,12 @@ if (process.env.OPENROUTER_API_KEY) {
   });
 }
 
-// =========================
-// MEMORY DB
-// =========================
+// ================= MEMORY =================
 const users = {};
 const chats = {};
 const processed = new Set();
 
-// =========================
-// WEBHOOK VERIFY
-// =========================
+// ================= VERIFY =================
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const challenge = req.query["hub.challenge"];
@@ -51,54 +35,48 @@ app.get("/webhook", (req, res) => {
   if (mode && verifyToken === verify_token) {
     return res.status(200).send(challenge);
   }
+
   return res.sendStatus(403);
 });
 
-// =========================
-// WEBHOOK RECEIVE
-// =========================
+// ================= WEBHOOK =================
 app.post("/webhook", async (req, res) => {
-
-  console.log("📩 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
-
   res.sendStatus(200);
 
   try {
-
-    const value = req.body.entry?.[0]?.changes?.[0]?.value;
-    const message = value?.messages?.[0];
-
+    const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
     if (!message) return;
 
     const from = message.from;
     const text = message.text?.body?.toLowerCase().trim() || "";
     const id = message.id;
 
-    // evitar duplicados
     if (processed.has(id)) return;
     processed.add(id);
 
     // init user
     if (!users[from]) {
-      users[from] = { step: "", name: "", pet: "", date: "", time: "" };
+      users[from] = {
+        step: "idle",
+        name: "",
+        pet: "",
+        date: "",
+        time: ""
+      };
     }
 
-    // init chat log
+    // log chat (limitado para no explotar RAM)
     if (!chats[from]) chats[from] = [];
-
-    // guardar mensaje
-    chats[from].push({
-      from,
-      text,
-      time: new Date().toISOString()
-    });
+    chats[from].push({ from, text, time: Date.now() });
+    if (chats[from].length > 30) chats[from].shift();
 
     let reply = "";
 
     // ================= MENU =================
     if (text === "hola" || text === "menu") {
-      users[from].step = "";
-      reply = `🐾 La Granja PH
+      users[from].step = "idle";
+      reply =
+`🐾 La Granja PH
 
 1️⃣ Agendar cita
 2️⃣ Productos
@@ -106,8 +84,8 @@ app.post("/webhook", async (req, res) => {
 4️⃣ Consulta médica`;
     }
 
-    // ================= AGENDA =================
-   else if (text === "1" && !users[from].step) {
+    // ================= FLOW =================
+    else if (text === "1" && users[from].step === "idle") {
       users[from].step = "name";
       reply = "👤 ¿Tu nombre?";
     }
@@ -115,7 +93,7 @@ app.post("/webhook", async (req, res) => {
     else if (users[from].step === "name") {
       users[from].name = text;
       users[from].step = "pet";
-      reply = "🐶 Nombre de tu mascota?";
+      reply = "🐶 Nombre de tu mascota";
     }
 
     else if (users[from].step === "pet") {
@@ -146,66 +124,60 @@ app.post("/webhook", async (req, res) => {
         users[from].time = slots[text];
 
         try {
-          const r = await axios.post(SHEET_URL, {
+          await axios.post(SHEET_URL, {
             nombre: users[from].name,
             mascota: users[from].pet,
-            servicio: "Baño",
+            servicio: "Baño y grooming",
             fecha: users[from].date,
             hora: users[from].time
           });
 
-          reply = ` ✅ Cita confirmada para ${users[from].pet}`;
+          reply = `✅ Cita confirmada para ${users[from].pet} a las ${users[from].time} `;
 
-          delete users[from];
+          users[from].step = "idle";
 
         } catch (e) {
-          reply = "⚠️ Error guardando cita";
+          reply = "⚠️ Error guardando cita en sistema";
         }
       }
     }
 
-    // ================= PRODUCTOS =================
+    // ================= OPTIONS =================
     else if (text === "2") {
-      reply = "🍖 Tenemos comida premium para perros y gatos";
+      reply = "🍖 Comida premium disponible para perros y gatos";
     }
 
-    // ================= ASESOR =================
-    else if (text === "3" || text.includes("asesor") || text.includes("humano")) {
-
+    else if (text === "3") {
       users[from].step = "advisor";
-
-      reply = "👩‍⚕️ Un asesor te atenderá pronto. Escribe tu consulta.";
+      reply = "👩‍⚕️ Describe tu caso y un asesor te responde.";
     }
 
-    // ================= CONSULTA MÉDICA =================
     else if (text === "4" || users[from].step === "advisor") {
-
-      reply = "🩺 Describe el problema de tu mascota y un veterinario te responde.";
-
+      reply = "🩺 Describe síntomas de tu mascota (veterinario te responde)";
     }
 
     // ================= IA =================
-    else {
+    else if (users[from].step === "idle" && client) {
 
-      if (client) {
-        const completion = await client.chat.completions.create({
-          model: "openai/gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: "Eres asistente de veterinaria. Respuestas cortas."
-            },
-            { role: "user", content: text }
-          ]
-        });
+      const completion = await client.chat.completions.create({
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Eres asistente veterinario. Responde corto y claro."
+          },
+          { role: "user", content: text }
+        ]
+      });
 
-        reply = completion.choices[0].message.content;
-      } else {
-        reply = "🤖 IA no disponible";
-      }
+      reply = completion.choices[0].message.content;
     }
 
-    // enviar WhatsApp
+    else {
+      reply = "Escribe menu para ver opciones 🐾";
+    }
+
+    // ================= SEND =================
     await axios.post(
       "https://graph.facebook.com/v22.0/1168848789639885/messages",
       {
@@ -215,32 +187,25 @@ app.post("/webhook", async (req, res) => {
       },
       {
         headers: {
-          Authorization: ` Bearer ${token}`
+          Authorization: `Bearer ${token} `
         }
       }
     );
-
-    console.log("✔️ respuesta enviada");
 
   } catch (err) {
     console.log("ERROR:", err.message);
   }
 });
 
-// =========================
-// PANEL WEB (WHATSAPP BUSINESS STYLE)
-// =========================
+// ================= PANEL =================
 app.get("/panel", (req, res) => {
-
-  let html = ` <h1>📊 PANEL LA GRANJA PH</h1>`;
-  html += `<p>Total chats: ${Object.keys(chats).length}</p><hr/> `;
+  let html = "<h1>📊 Panel La Granja PH</h1>";
 
   for (let user in chats) {
+    html += ` <h3>${user}</h3>`;
 
-    html += ` <h3>📱 ${user}</h3>`;
-
-    chats[user].slice(-15).forEach(m => {
-      html += `<p><b>${m.from}</b>: ${m.text}<br><small>${m.time}</small></p> `;
+    chats[user].slice(-10).forEach(m => {
+      html += ` <p>${m.text}</p>`;
     });
 
     html += "<hr/>";
@@ -249,11 +214,9 @@ app.get("/panel", (req, res) => {
   res.send(html);
 });
 
-// =========================
-// START SERVER
-// =========================
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("🚀 Servidor corriendo en puerto", PORT);
+  console.log("🚀 Bot activo en puerto", PORT);
 });
